@@ -1,14 +1,22 @@
 {
   "version": 1,
-  "images": [
-    {
-      "filename": "EXAMPLE-remove-me.jpg",
-      "site": "Bir Billing, India",
-      "themes": ["commitment", "risk"],
-      "mood": "expansive",
-      "palette": ["#8ab4d8", "#e4d5b7"],
-      "credit": "Travis",
-      "alt_text": "A paraglider climbing in a thermal above a wide Himalayan valley at midday."
-    }
-  ]
+  "_entry_schema": {
+    "filename": "required — file in this directory (.jpg/.jpeg/.png)",
+    "themes": "required — list of theme tags matched against a quote's theme",
+    "site": "optional — also matchable as a tag",
+    "mood": "optional — also matchable as a tag",
+    "palette": "optional — informational only",
+    "credit": "optional — informational only",
+    "alt_text": "optional — used as the Instagram alt text if present"
+  },
+  "_example": {
+    "filename": "bir-thermal-climb.jpg",
+    "themes": ["commitment", "risk"],
+    "site": "Bir Billing, India",
+    "mood": "expansive",
+    "palette": ["#8ab4d8", "#e4d5b7"],
+    "credit": "Travis",
+    "alt_text": "A paraglider climbing in a thermal above a wide Himalayan valley at midday."
+  },
+  "images": []
 }

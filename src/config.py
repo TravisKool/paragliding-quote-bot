@@ -8,10 +8,24 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()  # no-op in CI, where the values come from Actions secrets
+
+# --- Repo layout -------------------------------------------------------
+# Paths are resolved from this file so commands work from any working
+# directory, not just the repo root.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+IMAGES_DIR = REPO_ROOT / "images"
+LIBRARY_DIR = IMAGES_DIR / "library"
+GENERATED_DIR = IMAGES_DIR / "generated"
+MANIFEST_PATH = LIBRARY_DIR / "manifest.json"
+BOOK_DIR = REPO_ROOT / "book"
+
+# Extensions the Graph API will accept for a feed image.
+SUPPORTED_IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png"})
 
 # --- Instagram limits (Graph API) --------------------------------------
 CAPTION_MAX_CHARS = 2200
@@ -116,13 +130,20 @@ def load_config() -> Config:
 
 __all__ = [
     "ALT_TEXT_MAX_CHARS",
+    "BOOK_DIR",
     "CAPTION_MAX_CHARS",
+    "GENERATED_DIR",
     "GRAPH_API_BASE",
     "GRAPH_API_VERSION",
     "HASHTAG_MAX_COUNT",
     "HASHTAG_TARGET_COUNT",
+    "IMAGES_DIR",
     "LAUNCH_DELAY_SECONDS",
     "LAUNCH_POST_COUNT",
+    "LIBRARY_DIR",
+    "MANIFEST_PATH",
+    "REPO_ROOT",
+    "SUPPORTED_IMAGE_SUFFIXES",
     "Config",
     "ConfigError",
     "load_config",
