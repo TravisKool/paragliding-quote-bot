@@ -1,0 +1,45 @@
+name: Daily post
+
+# The cron is deliberately commented out until the pipeline is implemented
+# (Phase 7) and a dry run has been reviewed — otherwise this fails every night
+# and trains you to ignore the failure emails. Uncomment to go live.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run everything except the Instagram publish"
+        type: boolean
+        default: true
+  # schedule:
+  #   - cron: "0 16 * * *"  # 16:00 UTC daily — pick a fixed slot, see README
+
+concurrency:
+  group: daily-post
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Post
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          IMAGE_BASE_URL: ${{ vars.IMAGE_BASE_URL }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+        # Non-zero exit on failure is what triggers GitHub's workflow-failure
+        # email — don't swallow errors here.
+        run: python -m src.main

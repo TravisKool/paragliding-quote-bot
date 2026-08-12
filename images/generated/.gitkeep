@@ -1,0 +1,3 @@
+# AI-generated fallback images live here.
+# Only used when the tagged library is empty — pick_image logs a warning if it
+# ever falls through to this directory.

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "images": [
+    {
+      "filename": "EXAMPLE-remove-me.jpg",
+      "site": "Bir Billing, India",
+      "themes": ["commitment", "risk"],
+      "mood": "expansive",
+      "palette": ["#8ab4d8", "#e4d5b7"],
+      "credit": "Travis",
+      "alt_text": "A paraglider climbing in a thermal above a wide Himalayan valley at midday."
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+anthropic>=0.69
+libsql-client>=0.3.1
+pdfplumber>=0.11
+requests>=2.32
+python-dotenv>=1.0
+
+# Dev / test
+pytest>=8.0
+ruff>=0.6
