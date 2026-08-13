@@ -107,7 +107,7 @@ CAPTION_SCHEMA = {
 }
 
 
-def _client(config: Config):
+def build_client(config: Config):
     """Build an Anthropic client. Imported lazily so modules that never call
     Claude (and the test suite) don't need the SDK loaded."""
     import anthropic
@@ -116,7 +116,7 @@ def _client(config: Config):
     return anthropic.Anthropic(api_key=config.anthropic_api_key)
 
 
-def _text_of(response: Any) -> str:
+def first_text(response: Any) -> str:
     """First text block of a response, checking for a refusal first.
 
     Claude Opus 5 returns HTTP 200 with stop_reason "refusal" when its safety
@@ -211,7 +211,7 @@ def generate_caption_parts(
 ) -> tuple[str, list[str]]:
     """Ask Claude for the context paragraph and hashtags."""
     config = config or load_config()
-    client = client or _client(config)
+    client = client or build_client(config)
 
     details = [f"Quote: {quote.get('quote_text', '').strip()}"]
     for label, key in (("Author", "author"), ("Book", "book_title"), ("Theme", "theme")):
@@ -232,7 +232,7 @@ def generate_caption_parts(
         messages=[{"role": "user", "content": "\n".join(details)}],
     )
 
-    raw = _text_of(response)
+    raw = first_text(response)
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -262,7 +262,7 @@ def generate_alt_text(
         return None
 
     try:
-        client = client or _client(config)
+        client = client or build_client(config)
         encoded = base64.standard_b64encode(image_path.read_bytes()).decode("ascii")
         response = client.messages.create(
             model=config.anthropic_model,
@@ -286,7 +286,7 @@ def generate_alt_text(
                 }
             ],
         )
-        return _text_of(response).strip()[:ALT_TEXT_MAX_CHARS] or None
+        return first_text(response).strip()[:ALT_TEXT_MAX_CHARS] or None
     except Exception:
         log.warning("Alt-text generation failed for %s — posting without it", image_path.name,
                     exc_info=True)
@@ -303,7 +303,7 @@ def build_post(
 ) -> GeneratedPost:
     """Produce the caption and alt text for one post."""
     config = config or load_config()
-    client = client or _client(config)
+    client = client or build_client(config)
 
     context, hashtags = generate_caption_parts(quote, config=config, client=client)
     caption = assemble_caption(quote, context, hashtags)

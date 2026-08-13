@@ -1,0 +1,44 @@
+name: Refresh Instagram token
+
+# Long-lived tokens last ~60 days. This runs monthly rather than every 50 days
+# because cron cannot express "every 50 days" — monthly gives two chances to
+# renew inside each window, so a single failed run is not fatal.
+#
+# Meta refuses to extend a token less than 24 hours old, and once a token has
+# actually expired there is nothing left to exchange: recovery is the manual
+# OAuth flow. Keep this schedule enabled even while the daily post is paused.
+on:
+  schedule:
+    - cron: "0 3 1 * *" # 03:00 UTC on the 1st of each month
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Exchange the token but do not write the secret"
+        type: boolean
+        default: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install requests python-dotenv
+
+      - name: Exchange and store the token
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          META_APP_ID: ${{ secrets.META_APP_ID }}
+          META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+          # The default GITHUB_TOKEN cannot write secrets — this must be a
+          # repo-scoped PAT with the "Secrets" repository permission.
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python scripts/refresh_ig_token.py ${{ inputs.dry_run && '--dry-run' || '' }}
