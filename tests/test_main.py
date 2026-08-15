@@ -255,3 +255,85 @@ def test_dry_run_flag_is_honoured(env, db, monkeypatch):
     monkeypatch.setattr(main_module, "publish_one", capture)
     main_module.main(["--dry-run"])
     assert seen["dry_run"] is True
+
+
+# --- image mode --------------------------------------------------------
+#
+# With no photo library the run has to fall back to a generated quote card,
+# because an empty library is the normal state of a new account rather than a
+# fault. These drive choose_image directly: it is the only place that decides.
+
+
+@pytest.fixture
+def quote_row():
+    return {
+        "id": 1,
+        "quote_text": "Fear is information, not instruction.",
+        "theme": "fear",
+        "author": "Ada Thermalwright",
+        "book_title": "Reading The Air",
+    }
+
+
+def empty_library(monkeypatch):
+    """Make pick_image behave as it does with nothing in images/library/."""
+    from src.pick_image import NoImagesAvailable
+
+    def raise_empty(theme):
+        raise NoImagesAvailable("No usable images in images/library/.")
+
+    monkeypatch.setattr(main_module, "pick_image", raise_empty)
+
+
+def test_auto_mode_prefers_a_photo_when_the_library_has_one(env, quote_row):
+    choice = main_module.choose_image(quote_row, env.config)
+    assert choice.source == "theme-match"
+
+
+def test_auto_mode_renders_a_card_when_the_library_is_empty(
+    env, quote_row, monkeypatch, tmp_path
+):
+    empty_library(monkeypatch)
+    monkeypatch.setattr(main_module, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr("src.make_card.GENERATED_DIR", tmp_path / "images" / "generated")
+
+    choice = main_module.choose_image(quote_row, env.config)
+    assert choice.source == "generated-card"
+    assert choice.path.exists()
+    assert choice.relative_path.startswith("images/generated/")
+
+
+def test_card_alt_text_carries_the_quote(env, quote_row, monkeypatch, tmp_path):
+    """Set here rather than left to generate_post, which would otherwise spend
+    a vision call reading the card's own text back off the image."""
+    empty_library(monkeypatch)
+    monkeypatch.setattr(main_module, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr("src.make_card.GENERATED_DIR", tmp_path / "images" / "generated")
+
+    choice = main_module.choose_image(quote_row, env.config)
+    assert quote_row["quote_text"] in choice.alt_text
+    assert "Ada Thermalwright, Reading The Air" in choice.alt_text
+
+
+def test_card_mode_skips_the_library_entirely(env, quote_row, monkeypatch, tmp_path):
+    monkeypatch.setenv("IMAGE_MODE", "card")
+    monkeypatch.setattr(main_module, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr("src.make_card.GENERATED_DIR", tmp_path / "images" / "generated")
+
+    choice = main_module.choose_image(quote_row, load_config())
+    assert choice.source == "generated-card"
+
+
+def test_photo_mode_fails_rather_than_posting_a_card(env, quote_row, monkeypatch):
+    from src.pick_image import NoImagesAvailable
+
+    monkeypatch.setenv("IMAGE_MODE", "photo")
+    empty_library(monkeypatch)
+
+    with pytest.raises(NoImagesAvailable):
+        main_module.choose_image(quote_row, load_config())
+
+
+def test_an_unrecognised_image_mode_degrades_to_auto(monkeypatch):
+    monkeypatch.setenv("IMAGE_MODE", "carrd")
+    assert load_config().image_mode == "auto"

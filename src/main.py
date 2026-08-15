@@ -2,8 +2,12 @@
 
     python -m src.main [--dry-run]
 
-Flow: pick a quote -> pick a photo -> write the caption and alt text -> make the
-image publicly reachable -> publish -> record the post and mark the quote used.
+Flow: pick a quote -> pick an image -> write the caption and alt text -> make
+the image publicly reachable -> publish -> record the post and mark the quote
+used.
+
+The image is a photo from the library when there is one, and a generated quote
+card when there is not — see choose_image and IMAGE_MODE.
 
 Two invariants:
 
@@ -23,12 +27,14 @@ import argparse
 import logging
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
-from .config import Config, load_config
+from .config import REPO_ROOT, Config, load_config
 from .db import Database, Row, connect, record_failed_post, record_successful_post
 from .generate_post import CaptionRefused, GeneratedPost, GenerationError, build_post
 from .instagram_client import InstagramClient
-from .pick_image import ImageChoice, pick_image
+from .make_card import attribution_for, render_card
+from .pick_image import ImageChoice, NoImagesAvailable, pick_image
 from .publish_image_host import ensure_public_url
 from .select_quote import candidates
 
@@ -117,6 +123,40 @@ def publish_one(
     ) from last_error
 
 
+def choose_image(quote: Row, config: Config) -> ImageChoice:
+    """A photo from the library, or a quote card rendered for this quote.
+
+    Honours IMAGE_MODE: 'photo' insists on the library and lets the run fail if
+    it is empty; 'card' skips the library entirely; 'auto' (the default) uses
+    the library when it has something and generates a card when it does not,
+    which is what makes an empty library a non-blocking state.
+    """
+    if config.image_mode != "card":
+        try:
+            return pick_image(quote.get("theme"))
+        except NoImagesAvailable:
+            if config.image_mode == "photo":
+                raise
+            log.info("No photo library — rendering a quote card instead")
+
+    card = render_card(
+        quote["quote_text"],
+        theme=quote.get("theme"),
+        attribution=attribution_for(quote),
+    )
+    return ImageChoice(
+        path=card.path,
+        relative_path=_relative_to_repo(card.path),
+        source="generated-card",
+        alt_text=card.alt_text,
+    )
+
+
+def _relative_to_repo(path: Path) -> str:
+    """Repo-relative POSIX path, matching what pick_image produces."""
+    return path.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+
+
 def _attempt(
     db: Database,
     config: Config,
@@ -126,7 +166,7 @@ def _attempt(
     client: object | None,
     instagram: InstagramClient | None,
 ) -> PostOutcome:
-    image = pick_image(quote.get("theme"))
+    image = choose_image(quote, config)
     log.info("Selected %s (%s)", image.relative_path, image.source)
 
     post = build_post(

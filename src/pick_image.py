@@ -3,8 +3,12 @@
 Resolution order:
   1. an entry in images/library/manifest.json tagged with the quote's theme
   2. any entry in the library
-  3. a file in images/generated/ (logs a warning — this path means the library
-     is empty or entirely broken, which shouldn't happen once photos are added)
+
+With an empty library this raises NoImagesAvailable, and main.py renders a
+quote card instead. It deliberately does *not* fall back to whatever is sitting
+in images/generated/: those are per-quote cards with the quote baked into the
+picture, so serving an old one alongside a new caption would publish a post
+that contradicts itself.
 
 Manifest entries whose file is missing on disk are skipped everywhere. A URL
 that 404s makes the Graph API reject the whole post, and the failure surfaces
@@ -22,7 +26,6 @@ from pathlib import Path
 from typing import Any
 
 from .config import (
-    GENERATED_DIR,
     LIBRARY_DIR,
     MANIFEST_PATH,
     REPO_ROOT,
@@ -121,7 +124,6 @@ def pick_image(
     theme: str | None,
     *,
     library_dir: Path | None = None,
-    generated_dir: Path | None = None,
     manifest_path: Path | None = None,
     repo_root: Path | None = None,
     rng: random.Random | None = None,
@@ -132,7 +134,6 @@ def pick_image(
     against a temporary library with deterministic choices.
     """
     library_dir = library_dir or LIBRARY_DIR
-    generated_dir = generated_dir or GENERATED_DIR
     repo_root = repo_root or REPO_ROOT
     rng = rng or random.Random()
 
@@ -177,22 +178,7 @@ def pick_image(
             source="library-random",
         )
 
-    # 3. Generated fallback.
-    generated = _scan_directory(generated_dir)
-    if generated:
-        log.warning(
-            "Image library is empty — falling back to %s. Add tagged photos to %s.",
-            generated_dir.name,
-            library_dir,
-        )
-        path = rng.choice(generated)
-        return ImageChoice(
-            path=path,
-            relative_path=_relative_to_repo(path, repo_root),
-            source="generated-fallback",
-        )
-
     raise NoImagesAvailable(
-        f"No usable images in {library_dir} or {generated_dir}. "
-        "Add photos to images/library/ and list them in manifest.json."
+        f"No usable images in {library_dir}. Add photos there and list them in "
+        "manifest.json, or leave IMAGE_MODE at 'auto' to post generated quote cards."
     )

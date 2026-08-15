@@ -172,6 +172,26 @@ def test_quote_metadata_is_sent_to_the_model(config):
     assert "fear" in sent
 
 
+def test_context_excerpt_and_chapter_are_sent_when_present(config):
+    quote = {
+        **QUOTE,
+        "chapter": "Valley flow",
+        "context_excerpt": "The pilot dives into the lee, chasing a line that isn't there.",
+    }
+    client = caption_client()
+    generate_caption_parts(quote, config=config, client=client)
+    sent = client.calls[0]["messages"][0]["content"]
+    assert "Valley flow" in sent
+    assert "The pilot dives into the lee" in sent
+
+
+def test_no_excerpt_block_when_quote_has_none(config):
+    client = caption_client()
+    generate_caption_parts(QUOTE, config=config, client=client)
+    sent = client.calls[0]["messages"][0]["content"]
+    assert "Excerpt from the book page" not in sent
+
+
 def test_refusal_raises_caption_refused(config):
     client = FakeClient(
         types.SimpleNamespace(

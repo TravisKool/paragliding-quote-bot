@@ -8,7 +8,12 @@ summary, and spot-check the pool before going anywhere near a live account.
 Pages are batched into groups before being sent to Claude, because a single
 page rarely contains a quotable passage and the surrounding text is what tells
 the model whether a sentence stands alone. Each extracted quote comes back with
-a quality_score and a theme label.
+a quality_score, a theme, and a best-guess chapter (matched against the book's
+own table of contents, when the front matter has one).
+
+The source page's full text is stored alongside the quote as `context_excerpt`
+— generate_post.py uses it to ground the caption in what the author was
+actually describing, rather than writing from the bare quote alone.
 
 Near-duplicate filtering happens here rather than in the database: books repeat
 their best lines across chapters, and the UNIQUE constraint on quote_text only
@@ -48,6 +53,15 @@ IDEAL_MAX_CHARS = 280
 # Hard ceiling, so a quote can never blow the caption limit on its own.
 ABSOLUTE_MAX_CHARS = 1200
 
+# How much of the source page to keep as grounding material for caption
+# generation later. A whole page is more than generate_post needs, and stuffing
+# all of it into every caption call would cost tokens for no benefit.
+CONTEXT_EXCERPT_MAX_CHARS = 1500
+
+# How many pages of front matter to show the model as a chapter/section
+# reference (most books put a table of contents in the first few pages).
+FRONT_MATTER_PAGES = 3
+
 SEED_SYSTEM_PROMPT = f"""\
 You extract quotable passages from a paragliding instructional book for a daily \
 Instagram quote account. The audience is cross-country pilots.
@@ -69,9 +83,17 @@ Quote text verbatim. Do not paraphrase, do not stitch sentences together from \
 different paragraphs, and do not fix the author's grammar. Omit the surrounding \
 quotation marks.
 
+You may be shown a "Front matter" excerpt containing the book's table of \
+contents. If a passage's subject matter clearly matches one of those section or \
+chapter titles, use that title for `chapter`. If nothing matches with real \
+confidence, return an empty string — a guess is worse than nothing here, since \
+this field is used to organise the pool, not shown to readers.
+
 For each passage give:
 - quote_text: the passage, verbatim
 - source_page: the page number it appeared on
+- chapter: the closest matching chapter/section title from the front matter, \
+or "" if none fits
 - theme: one lowercase word, chosen from fear, commitment, risk, technique, \
 judgement, patience, weather, learning, mindset, or safety
 - quality_score: 0.0-1.0, how well it works as a standalone social post. \
@@ -92,10 +114,11 @@ SEED_SCHEMA = {
                 "properties": {
                     "quote_text": {"type": "string"},
                     "source_page": {"type": "integer"},
+                    "chapter": {"type": "string"},
                     "theme": {"type": "string"},
                     "quality_score": {"type": "number"},
                 },
-                "required": ["quote_text", "source_page", "theme", "quality_score"],
+                "required": ["quote_text", "source_page", "chapter", "theme", "quality_score"],
                 "additionalProperties": False,
             },
         }
@@ -165,10 +188,18 @@ def deduplicate(quotes: list[dict[str, Any]], threshold: float = DUPLICATE_THRES
 
 
 def extract_from_batch(
-    batch: list[Page], *, config: Config, client: Any, book_title: str, author: str | None
+    batch: list[Page],
+    *,
+    config: Config,
+    client: Any,
+    book_title: str,
+    author: str | None,
+    front_matter: str = "",
 ) -> list[dict[str, Any]]:
     """Ask Claude for the quotable passages in one batch of pages."""
     body = "\n\n".join(f"--- Page {page.number} ---\n{page.text}" for page in batch)
+    if front_matter:
+        body = f"--- Front matter (for chapter reference only) ---\n{front_matter}\n\n{body}"
 
     response = client.messages.create(
         model=config.anthropic_model,
@@ -187,6 +218,8 @@ def extract_from_batch(
     except json.JSONDecodeError as exc:
         raise GenerationError("Extraction response was not valid JSON") from exc
 
+    pages_by_number = {page.number: page.text for page in batch}
+
     results = []
     for item in payload.get("quotes", []):
         text = str(item.get("quote_text", "")).strip().strip('"“”')
@@ -194,12 +227,16 @@ def extract_from_batch(
             log.debug("Rejecting quote of length %d", len(text))
             continue
         score = item.get("quality_score")
+        source_page = item.get("source_page")
+        page_text = pages_by_number.get(source_page, "")
         results.append(
             {
                 "quote_text": text,
                 "author": author,
                 "book_title": book_title,
-                "source_page": item.get("source_page"),
+                "source_page": source_page,
+                "chapter": str(item.get("chapter", "")).strip() or None,
+                "context_excerpt": page_text[:CONTEXT_EXCERPT_MAX_CHARS] or None,
                 "theme": str(item.get("theme", "")).strip().lower() or None,
                 "quality_score": max(0.0, min(1.0, float(score))) if score is not None else None,
             }
@@ -262,6 +299,8 @@ def main(argv: list[str] | None = None) -> int:
     batches = batch_pages(pages, args.batch_size)
     log.info("Extracted %d pages of text in %d batch(es)", len(pages), len(batches))
 
+    front_matter = "\n\n".join(page.text for page in pages[:FRONT_MATTER_PAGES])
+
     client = build_client(config)
     collected: list[dict[str, Any]] = []
     failed_batches = 0
@@ -271,7 +310,12 @@ def main(argv: list[str] | None = None) -> int:
         log.info("Batch %d/%d (%s)", index, len(batches), span)
         try:
             found = extract_from_batch(
-                batch, config=config, client=client, book_title=book_title, author=args.author
+                batch,
+                config=config,
+                client=client,
+                book_title=book_title,
+                author=args.author,
+                front_matter=front_matter,
             )
         except Exception as exc:
             # One bad batch shouldn't cost the whole book — a partial pool is
@@ -292,7 +336,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         log.info("--dry-run: not writing to the database")
         for quote in unique[:20]:
-            print(f"\n[{quote['quality_score']:.2f}] ({quote['theme']}) {quote['quote_text']}")
+            chapter = quote.get("chapter") or "—"
+            print(
+                f"\n[{quote['quality_score']:.2f}] ({quote['theme']}) [{chapter}] "
+                f"{quote['quote_text']}"
+            )
         return 0
 
     with connect(config) as db:

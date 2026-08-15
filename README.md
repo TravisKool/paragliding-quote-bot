@@ -1,15 +1,19 @@
 # Paragliding Quote Bot
 
 A daily-run Python app that pulls curated quotes from a paragliding masterclass
-book, has Claude write a short piece of context for each one, pairs it with a
-relevant paragliding photo, and posts it to a dedicated Instagram account.
+book, has Claude write a short piece of context for each one, pairs it with an
+image, and posts it to a dedicated Instagram account.
+
+The image is a photo from `images/library/` when there is one, and a generated
+typography card when there is not — so an empty photo library is a normal
+state, not a blocker.
 
 One post per day, no repeats, no manual intervention once live. Runs on GitHub
 Actions cron — no paid hosting.
 
 ## Status
 
-All pipeline code is written and tested (124 tests, no live credentials
+All pipeline code is written and tested (180 tests, no live credentials
 required). **Nothing is live yet** — the daily schedule is deliberately
 commented out, and the bot cannot run until the accounts in
 [Prerequisites](#prerequisites--things-only-you-can-do) exist and the quote pool
@@ -61,6 +65,7 @@ so each has a test guarding it:
 | AI             | Anthropic API (`claude-opus-5`), adaptive thinking, structured outputs |
 | Database       | SQLite via Turso — same DB locally and in CI, no sync step   |
 | PDF parsing    | `pdfplumber` (seed step only)                               |
+| Quote cards    | `Pillow` — typeset quote over a theme-tinted gradient        |
 | Image hosting  | `raw.githubusercontent.com` serving `/images` from this repo |
 | Publishing     | Meta Graph API via `requests` (three calls)                 |
 | Scheduling     | GitHub Actions `schedule`                                   |
@@ -84,8 +89,9 @@ them.
 6. **Repo-scoped PAT** — for the token-refresh workflow, stored as `GH_PAT`.
    The default `GITHUB_TOKEN` cannot write secrets.
 7. **Source PDF** — drop the book at `book/source.pdf`. Gitignored by default.
-8. **Photo library** — add ~15-20 photos to `images/library/` and list them in
-   `manifest.json`.
+8. **Photo library** — *optional*. With `images/library/` empty the bot posts
+   generated quote cards. To use photos instead, add ~15-20 to
+   `images/library/` and list them in `manifest.json`.
 9. **Email notifications** — confirm they're enabled for this repo. A failed
    daily run surfaces only as a workflow-failure email.
 
@@ -123,6 +129,35 @@ pytest
 Leave `TURSO_DATABASE_URL` blank locally and everything falls back to a SQLite
 file at `LOCAL_DB_PATH`. The test suite needs no credentials at all.
 
+## Images without a photo library
+
+With `images/library/` empty, each post gets a generated card: the quote
+typeset over a gradient tinted by its theme, 1080×1080. Look at one before
+deciding whether you like it:
+
+```powershell
+python -m src.make_card --preview "Fear is information." --theme fear --attribution "Author, Title"
+```
+
+Cards are rendered per post and named after a hash of the quote, so a retried
+run overwrites its own card rather than accumulating near-duplicates. They are
+never reused for a different quote — the quote is baked into the picture, so
+serving an old card with a new caption would publish a post that contradicts
+itself. That is why `pick_image` does not treat `images/generated/` as a
+fallback pool.
+
+Alt text for a card is the quote itself, which is both the correct description
+and one fewer vision call.
+
+**Fonts.** The renderer prefers a `.ttf` dropped into `assets/fonts/`, then
+system fonts, then the DejaVu copy bundled inside Pillow. Committing a font is
+the only way to guarantee the Ubuntu runner produces the same card your machine
+does — worth doing once you settle on a look.
+
+Switch behaviour with the `IMAGE_MODE` variable: `auto` (default), `card` to
+use cards even when photos exist, `photo` to fail the run rather than post a
+card.
+
 ## Going live
 
 In order:
@@ -158,6 +193,7 @@ python -m src.init_launch
 | ------- | ------------ |
 | `python -m src.db init` | Create the schema (idempotent) |
 | `python -m src.seed_quotes book/source.pdf` | Build the quote pool. `--dry-run`, `--limit-pages N`, `--author`, `--book-title` |
+| `python -m src.make_card --preview "..."` | Render a quote card to `images/generated/` to look at. `--theme`, `--attribution` |
 | `python -m src.main` | Publish one post. `--dry-run` |
 | `python -m src.init_launch` | Publish the launch batch. `--dry-run`, `--count N`, `--delay S` |
 | `python scripts/refresh_ig_token.py` | Rotate the IG token. `--dry-run` |
@@ -189,7 +225,15 @@ python -m src.seed_quotes book/source.pdf --author "Author Name"
 **Adding photos.** Drop files in `images/library/`, add an entry to
 `manifest.json` (see `_entry_schema` in that file), commit and push. Include
 `alt_text` where you can — a human description beats a generated one, and it
-skips an API call. Untagged images still get used as random fallbacks.
+skips an API call. Untagged images still get used as random fallbacks. The
+first photo added takes over from generated cards automatically; no config
+change needed.
+
+**Generated cards are piling up in the repo.** Each post commits its card so
+`raw.githubusercontent.com` can serve it. They are small (~100-200KB) and named
+by quote hash, so a year of daily posts is well under 100MB. If it ever
+matters, deleting old cards from `images/generated/` is safe — published posts
+keep their image on Instagram's CDN, not from this repo.
 
 **The daily run failed.** Check the Actions log. The quote was not consumed, so
 the next run retries it. Common causes:
@@ -222,14 +266,15 @@ src/
   db.py                  Turso/SQLite backends + query helpers
   seed_quotes.py         PDF -> Claude -> scored quote pool
   select_quote.py        candidate selection, low-pool warning
-  pick_image.py          theme match + fallbacks
+  pick_image.py          theme match against the photo library
+  make_card.py           typeset a quote onto a generated background
   generate_post.py       caption assembly, hashtags, alt text
   publish_image_host.py  public URL, commit-if-needed, reachability
   instagram_client.py    Graph API container -> wait -> publish
   main.py                daily orchestration
   init_launch.py         go-live batch
 scripts/refresh_ig_token.py
-tests/                   124 tests, no credentials needed
+tests/                   180 tests, no credentials needed
 ```
 
 ## Open decisions
@@ -239,6 +284,10 @@ Defaults chosen during the build — say the word and any of these change:
 - **Image hosting: `raw.githubusercontent.com`.** Simplest, no Pages build step.
 - **Source PDF: gitignored.** Remove `book/*.pdf` from `.gitignore` to commit it
   (this repo is private).
+- **Images default to generated cards.** `IMAGE_MODE=auto` uses the photo
+  library when it has something and cards when it does not. Set `card` to
+  always use cards even with photos present, or `photo` to fail the run rather
+  than post a card.
 - **Posting time: 16:00 UTC**, in the commented cron. Cron has no timezone, so
   a fixed local time across DST would need two schedules.
 - **Refusal fallbacks are not enabled.** Claude Opus 5 can decline a request;

@@ -73,6 +73,14 @@ to a crossing, managing fear on a bumpy day. Say something a pilot would nod at.
 Do not restate the quote in different words, do not open with "This quote \
 reminds us", and do not address the reader as "you guys" or similar.
 
+You may also be given an excerpt of the book page the quote came from. Use it \
+only to understand the concrete scenario, technique, or reasoning the author is \
+actually describing — it tells you what the quote is really about, so your take \
+doesn't drift from the author's point. Do not summarize, paraphrase, or lift \
+phrasing from the excerpt: write your own observation about the idea, in your \
+own words, grounded in what the excerpt shows the quote means. If no excerpt is \
+given, work from the quote and theme alone.
+
 2. Between 5 and 10 hashtags. Specific and paragliding-relevant. No generic \
 engagement tags (#love, #instagood, #photooftheday), no tag longer than 30 \
 characters, and no duplicates.
@@ -214,10 +222,18 @@ def generate_caption_parts(
     client = client or build_client(config)
 
     details = [f"Quote: {quote.get('quote_text', '').strip()}"]
-    for label, key in (("Author", "author"), ("Book", "book_title"), ("Theme", "theme")):
+    for label, key in (
+        ("Author", "author"),
+        ("Book", "book_title"),
+        ("Chapter", "chapter"),
+        ("Theme", "theme"),
+    ):
         value = quote.get(key)
         if value:
             details.append(f"{label}: {value}")
+    excerpt = (quote.get("context_excerpt") or "").strip()
+    if excerpt:
+        details.append(f"Excerpt from the book page (for grounding only):\n{excerpt}")
     details.append(f"Aim for about {HASHTAG_TARGET_COUNT} hashtags.")
 
     response = client.messages.create(

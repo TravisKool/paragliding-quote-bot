@@ -116,11 +116,12 @@ def test_unscored_quotes_do_not_crash_sorting():
 def batch_call(config, quotes, **kwargs):
     client = FakeClaude(quotes)
     result = extract_from_batch(
-        pages(3),
+        kwargs.get("batch") or pages(3),
         config=config,
         client=client,
         book_title=kwargs.get("book_title", "Masterclass"),
         author=kwargs.get("author", "A. Author"),
+        front_matter=kwargs.get("front_matter", ""),
     )
     return client, result
 
@@ -194,3 +195,59 @@ def test_request_uses_structured_output(config):
     request = client.calls[0]
     assert request["model"] == "claude-opus-5"
     assert request["output_config"]["format"]["type"] == "json_schema"
+
+
+# --- chapter and context excerpt ----------------------------------------
+
+
+def test_context_excerpt_is_the_source_pages_text(config):
+    """Grounding material for the caption step: the full text of the page the
+    quote came from, so generate_post can lean on it later."""
+    _, result = batch_call(
+        config, [{"quote_text": "A quote.", "source_page": 2, "theme": "fear", "quality_score": 0.7}]
+    )
+    assert result[0]["context_excerpt"] == pages(3)[1].text
+
+
+def test_context_excerpt_is_none_for_an_unknown_page(config):
+    """The model can misreport source_page; that shouldn't crash the batch."""
+    _, result = batch_call(
+        config, [{"quote_text": "A quote.", "source_page": 999, "theme": "fear", "quality_score": 0.7}]
+    )
+    assert result[0]["context_excerpt"] is None
+
+
+def test_chapter_is_carried_through(config):
+    _, result = batch_call(
+        config,
+        [
+            {
+                "quote_text": "A quote.",
+                "source_page": 1,
+                "chapter": "Valley flow",
+                "theme": "fear",
+                "quality_score": 0.7,
+            }
+        ],
+    )
+    assert result[0]["chapter"] == "Valley flow"
+
+
+def test_missing_or_blank_chapter_is_none(config):
+    _, result = batch_call(
+        config, [{"quote_text": "A quote.", "source_page": 1, "chapter": "", "theme": "fear", "quality_score": 0.7}]
+    )
+    assert result[0]["chapter"] is None
+
+
+def test_front_matter_is_prepended_when_given(config):
+    client, _ = batch_call(config, [], front_matter="Valley flow\nRoute adaptation")
+    sent = client.calls[0]["messages"][0]["content"]
+    assert "Front matter" in sent
+    assert "Valley flow" in sent
+
+
+def test_no_front_matter_block_when_none_given(config):
+    client, _ = batch_call(config, [])
+    sent = client.calls[0]["messages"][0]["content"]
+    assert "Front matter" not in sent

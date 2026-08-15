@@ -11,21 +11,16 @@ from src.pick_image import ImageChoice, NoImagesAvailable, load_manifest, pick_i
 
 @pytest.fixture
 def library(tmp_path):
-    """A temp repo root with library/ and generated/ directories."""
+    """A temp repo root with a library/ directory."""
 
     class Library:
         def __init__(self):
             self.root = tmp_path
             self.library_dir = tmp_path / "images" / "library"
-            self.generated_dir = tmp_path / "images" / "generated"
             self.library_dir.mkdir(parents=True)
-            self.generated_dir.mkdir(parents=True)
 
         def add(self, filename, directory=None):
             (directory or self.library_dir).joinpath(filename).write_bytes(b"fake-jpeg")
-
-        def add_generated(self, filename):
-            self.add(filename, self.generated_dir)
 
         def manifest(self, entries):
             (self.library_dir / "manifest.json").write_text(
@@ -36,7 +31,6 @@ def library(tmp_path):
             return pick_image(
                 theme,
                 library_dir=self.library_dir,
-                generated_dir=self.generated_dir,
                 repo_root=self.root,
                 rng=random.Random(seed),
             )
@@ -117,16 +111,19 @@ def test_images_without_a_manifest_are_still_usable(library):
     assert choice.alt_text is None
 
 
-def test_empty_library_falls_back_to_generated(library, caplog):
-    library.add_generated("ai.png")
-    with caplog.at_level("WARNING"):
-        choice = library.pick("fear")
-    assert choice.source == "generated-fallback"
-    assert "library is empty" in caplog.text.lower()
-
-
 def test_nothing_available_raises(library):
     with pytest.raises(NoImagesAvailable, match="No usable images"):
+        library.pick("fear")
+
+
+def test_previously_generated_cards_are_never_reused(library, tmp_path):
+    """A card has its quote baked into the picture, so reusing one would post
+    an image that contradicts the caption. Selection must not see them."""
+    generated = tmp_path / "images" / "generated"
+    generated.mkdir(parents=True)
+    (generated / "card-abc123.png").write_bytes(b"fake-png")
+
+    with pytest.raises(NoImagesAvailable):
         library.pick("fear")
 
 
@@ -159,8 +156,8 @@ def test_malformed_manifest_does_not_fail_the_run(library, caplog):
 
 def test_non_image_files_are_ignored(library):
     library.add("notes.txt")
-    library.add_generated("ai.png")
-    assert library.pick("fear").path.name == "ai.png"
+    library.add("photo.jpg")
+    assert library.pick("fear").path.name == "photo.jpg"
 
 
 def test_selection_is_deterministic_for_a_given_seed(library):

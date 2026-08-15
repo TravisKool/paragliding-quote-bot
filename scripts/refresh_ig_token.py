@@ -1,14 +1,15 @@
 """Rotate the long-lived Instagram access token before it expires.
 
-Long-lived tokens last ~60 days and can be exchanged for a fresh 60-day token at
-any point after they're 24 hours old. This runs on its own schedule (every ~50
-days) and writes the new value back to the IG_ACCESS_TOKEN repository secret.
+Long-lived tokens last ~60 days and can be refreshed for another 60 at any point
+after they're 24 hours old. This runs on its own schedule (every ~50 days) and
+writes the new value back to the IG_ACCESS_TOKEN repository secret.
 
     python scripts/refresh_ig_token.py [--dry-run]
 
 The *first* token must be obtained by hand — see the README. This script can
 only extend a token that already works; once one expires there is nothing left
-to exchange and you have to go back through the OAuth flow.
+to refresh and you have to reauthorise the account in the App Dashboard under
+"API setup with Instagram login".
 
 Writing the secret uses `gh secret set`, which is preinstalled on GitHub-hosted
 runners. That avoids a PyNaCl dependency just to libsodium-seal one value for
@@ -28,7 +29,7 @@ import sys
 # Allow running as a script from anywhere in the repo.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.config import GRAPH_API_BASE, ConfigError, load_config  # noqa: E402
+from src.config import GRAPH_API_HOST, ConfigError, load_config  # noqa: E402
 
 log = logging.getLogger("refresh_ig_token")
 
@@ -40,26 +41,23 @@ def exchange_token(config, session=None) -> tuple[str, int]:
     """Swap the current long-lived token for a fresh one.
 
     Returns (token, seconds_until_expiry).
+
+    Instagram Login refreshes a long-lived token in place rather than exchanging
+    one credential for another, so this needs only the token itself — no app id
+    and no app secret. That is why the CI job carries no Meta app credentials.
     """
     import requests
 
     http = session or requests
 
-    for name, value in (
-        ("META_APP_ID", config.meta_app_id),
-        ("META_APP_SECRET", config.meta_app_secret),
-        ("IG_ACCESS_TOKEN", config.ig_access_token),
-    ):
-        if not value:
-            raise ConfigError(f"{name} is required to refresh the token.")
+    if not config.ig_access_token:
+        raise ConfigError("IG_ACCESS_TOKEN is required to refresh the token.")
 
     response = http.get(
-        f"{GRAPH_API_BASE}/oauth/access_token",
+        f"{GRAPH_API_HOST}/refresh_access_token",
         params={
-            "grant_type": "fb_exchange_token",
-            "client_id": config.meta_app_id,
-            "client_secret": config.meta_app_secret,
-            "fb_exchange_token": config.ig_access_token,
+            "grant_type": "ig_refresh_token",
+            "access_token": config.ig_access_token,
         },
         timeout=30,
     )
@@ -68,8 +66,9 @@ def exchange_token(config, session=None) -> tuple[str, int]:
     if isinstance(payload, dict) and payload.get("error"):
         error = payload["error"]
         raise RuntimeError(
-            f"Token exchange failed: {error.get('message')} (code={error.get('code')}). "
-            "If the current token has already expired, redo the OAuth flow by hand."
+            f"Token refresh failed: {error.get('message')} (code={error.get('code')}). "
+            "If the current token has already expired, reauthorise the account by hand "
+            "in the App Dashboard under 'API setup with Instagram login'."
         )
     if response.status_code >= 400:
         raise RuntimeError(f"Token exchange returned HTTP {response.status_code}: {payload!r}")
@@ -115,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     token, expires_in = exchange_token(config)
     days = expires_in // 86400
     # Never log the token itself — CI logs are not a secret store.
-    log.info("Exchanged token successfully; the new one expires in ~%d days", days)
+    log.info("Refreshed token successfully; the new one expires in ~%d days", days)
 
     if days and days < RENEW_WARNING_DAYS:
         log.warning(

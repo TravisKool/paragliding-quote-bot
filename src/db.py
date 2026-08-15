@@ -23,12 +23,21 @@ Row = dict[str, Any]
 Statement = tuple[str, "list[Any]"]
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS books (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    author TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (title, author)
+);
+
 CREATE TABLE IF NOT EXISTS quotes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     quote_text TEXT NOT NULL UNIQUE,
-    author TEXT,
-    book_title TEXT,
+    book_id INTEGER REFERENCES books(id),
     source_page INTEGER,
+    chapter TEXT,
+    context_excerpt TEXT,
     quality_score REAL,
     theme TEXT,
     created_at TEXT NOT NULL,
@@ -178,6 +187,25 @@ def connect(config: Config | None = None) -> Database:
 # --- Quote pool --------------------------------------------------------
 
 
+def _get_or_create_book(db: Database, title: str | None, author: str | None) -> int | None:
+    """Resolve (title, author) to a books.id, inserting the row if it's new.
+
+    Matching is exact-string, same as the UNIQUE constraint on quote_text
+    elsewhere in this module — good enough as long as seed_quotes passes the
+    same title/author on every re-seed of a given book.
+    """
+    title = (title or "").strip()
+    author = (author or "").strip() or None
+    if not title:
+        return None
+    db.execute(
+        "INSERT OR IGNORE INTO books (title, author, created_at) VALUES (?, ?, ?)",
+        [title, author, utcnow_iso()],
+    )
+    row = db.query_one("SELECT id FROM books WHERE title = ? AND author IS ?", [title, author])
+    return row["id"] if row else None
+
+
 def insert_quotes(db: Database, quotes: list[dict[str, Any]]) -> int:
     """Insert candidate quotes, skipping any whose text is already present.
 
@@ -187,21 +215,30 @@ def insert_quotes(db: Database, quotes: list[dict[str, Any]]) -> int:
     """
     created_at = utcnow_iso()
     inserted = 0
+    book_ids: dict[tuple[str, str], int | None] = {}
     for quote in quotes:
         text = (quote.get("quote_text") or "").strip()
         if not text:
             continue
+
+        book_key = (quote.get("book_title") or "", quote.get("author") or "")
+        if book_key not in book_ids:
+            book_ids[book_key] = _get_or_create_book(db, quote.get("book_title"), quote.get("author"))
+        book_id = book_ids[book_key]
+
         affected = db.execute(
             """
             INSERT OR IGNORE INTO quotes
-                (quote_text, author, book_title, source_page, quality_score, theme, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (quote_text, book_id, source_page, chapter, context_excerpt,
+                 quality_score, theme, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 text,
-                quote.get("author"),
-                quote.get("book_title"),
+                book_id,
                 quote.get("source_page"),
+                quote.get("chapter"),
+                quote.get("context_excerpt"),
                 quote.get("quality_score"),
                 quote.get("theme"),
                 created_at,
@@ -226,12 +263,18 @@ def top_unused_quotes(db: Database, limit: int) -> list[Row]:
 
     SQLite sorts NULL below every number, so unscored quotes land at the back
     under DESC. The id tie-break keeps the order stable across runs.
+
+    Joins books back in so the returned row still carries flat `author` and
+    `book_title` fields — generate_post and make_card read those directly and
+    don't need to know books are normalized out.
     """
     return db.query(
         """
-        SELECT * FROM quotes
-        WHERE used_at IS NULL
-        ORDER BY quality_score DESC, id ASC
+        SELECT quotes.*, books.title AS book_title, books.author AS author
+        FROM quotes
+        LEFT JOIN books ON books.id = quotes.book_id
+        WHERE quotes.used_at IS NULL
+        ORDER BY quotes.quality_score DESC, quotes.id ASC
         LIMIT ?
         """,
         [limit],

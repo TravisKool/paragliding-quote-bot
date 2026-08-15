@@ -27,6 +27,17 @@ BOOK_DIR = REPO_ROOT / "book"
 # Extensions the Graph API will accept for a feed image.
 SUPPORTED_IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png"})
 
+# Optional fonts committed to the repo. Anything dropped here is preferred over
+# system fonts, which is the only way to get a consistent look between a local
+# Windows run and the Ubuntu runner the daily Action uses.
+FONTS_DIR = REPO_ROOT / "assets" / "fonts"
+
+# --- Quote cards -------------------------------------------------------
+# Used when there is no photo library: the quote is typeset onto a generated
+# background instead. Square, because it is the safest feed crop.
+CARD_SIZE = 1080
+CARD_MARGIN = 110  # keeps text clear of the feed's rounded corners
+
 # --- Instagram limits (Graph API) --------------------------------------
 CAPTION_MAX_CHARS = 2200
 HASHTAG_MAX_COUNT = 30
@@ -34,8 +45,13 @@ HASHTAG_TARGET_COUNT = 8  # 5-10 well-chosen tags outperform stuffing
 ALT_TEXT_MAX_CHARS = 1000
 
 # --- Graph API ---------------------------------------------------------
-GRAPH_API_VERSION = "v21.0"
-GRAPH_API_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
+# This bot uses the *Instagram API with Instagram Login*, so calls go to
+# graph.instagram.com rather than graph.facebook.com. That path needs no linked
+# Facebook Page and no business portfolio — the account authorises the app
+# directly. Endpoint shapes are otherwise identical to the Facebook-Login flow.
+GRAPH_API_VERSION = "v26.0"
+GRAPH_API_HOST = "https://graph.instagram.com"
+GRAPH_API_BASE = f"{GRAPH_API_HOST}/{GRAPH_API_VERSION}"
 
 # --- Launch ------------------------------------------------------------
 LAUNCH_POST_COUNT = 8
@@ -67,6 +83,31 @@ def _flag(name: str, default: bool = False) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+IMAGE_MODES = frozenset({"auto", "card", "photo"})
+
+
+def _image_mode() -> str:
+    """How the daily post gets its image.
+
+    auto  — use the photo library, and fall back to a generated quote card when
+            it has nothing usable. This is what an empty library needs.
+    card  — always generate a card, even if photos exist.
+    photo — only use the library, and fail the run rather than posting a card.
+
+    An unrecognised value falls back to auto with a warning rather than failing:
+    a typo here should not take the daily post down.
+    """
+    raw = _optional("IMAGE_MODE", "auto").lower()
+    if raw and raw not in IMAGE_MODES:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "IMAGE_MODE=%r is not one of %s — using 'auto'", raw, sorted(IMAGE_MODES)
+        )
+        return "auto"
+    return raw or "auto"
+
+
 @dataclass(frozen=True)
 class Config:
     anthropic_api_key: str
@@ -79,6 +120,7 @@ class Config:
     meta_app_id: str
     meta_app_secret: str
     image_base_url: str
+    image_mode: str  # "auto" | "card" | "photo"
     dry_run: bool
     log_level: str
 
@@ -123,6 +165,7 @@ def load_config() -> Config:
         meta_app_id=_optional("META_APP_ID"),
         meta_app_secret=_optional("META_APP_SECRET"),
         image_base_url=_optional("IMAGE_BASE_URL").rstrip("/"),
+        image_mode=_image_mode(),
         dry_run=_flag("DRY_RUN"),
         log_level=_optional("LOG_LEVEL", "INFO").upper(),
     )
@@ -132,8 +175,13 @@ __all__ = [
     "ALT_TEXT_MAX_CHARS",
     "BOOK_DIR",
     "CAPTION_MAX_CHARS",
+    "CARD_MARGIN",
+    "CARD_SIZE",
+    "FONTS_DIR",
     "GENERATED_DIR",
+    "IMAGE_MODES",
     "GRAPH_API_BASE",
+    "GRAPH_API_HOST",
     "GRAPH_API_VERSION",
     "HASHTAG_MAX_COUNT",
     "HASHTAG_TARGET_COUNT",

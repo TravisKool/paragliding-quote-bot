@@ -48,7 +48,7 @@ def test_init_schema_is_idempotent(db):
         row["name"]
         for row in db.query("SELECT name FROM sqlite_master WHERE type='table'")
     }
-    assert {"quotes", "posts"} <= tables
+    assert {"books", "quotes", "posts"} <= tables
 
 
 def test_connect_uses_sqlite_without_turso_url(db):
@@ -71,6 +71,53 @@ def test_insert_quotes_skips_exact_duplicates(db):
 def test_insert_quotes_ignores_blank_text(db):
     assert insert_quotes(db, [{"quote_text": "   "}, {"quote_text": ""}, {}]) == 0
     assert unused_quote_count(db) == 0
+
+
+def test_insert_quotes_stores_chapter_and_context_excerpt(db):
+    quote = make_quote("Trust the glider.")
+    quote["chapter"] = "Valley flow"
+    quote["context_excerpt"] = "The full page text surrounding the quote."
+    insert_quotes(db, [quote])
+    row = db.query_one("SELECT chapter, context_excerpt FROM quotes")
+    assert row["chapter"] == "Valley flow"
+    assert row["context_excerpt"] == "The full page text surrounding the quote."
+
+
+def test_insert_quotes_allows_missing_chapter_and_context_excerpt(db):
+    insert_quotes(db, [make_quote("No extra metadata.")])
+    row = db.query_one("SELECT chapter, context_excerpt FROM quotes")
+    assert row["chapter"] is None
+    assert row["context_excerpt"] is None
+
+
+# --- books ---------------------------------------------------------------
+
+
+def test_insert_quotes_creates_a_book_row(db):
+    insert_quotes(db, [make_quote("Trust the glider.")])
+    books = db.query("SELECT title, author FROM books")
+    assert books == [{"title": "Masterclass", "author": "A. Author"}]
+
+
+def test_insert_quotes_reuses_the_same_book_across_quotes(db):
+    """Seeding a book produces many quotes; they should share one books row,
+    not create a duplicate per quote."""
+    insert_quotes(db, [make_quote("One."), make_quote("Two."), make_quote("Three.")])
+    assert db.query_one("SELECT COUNT(*) AS n FROM books")["n"] == 1
+
+
+def test_insert_quotes_creates_separate_books_for_different_titles(db):
+    other = make_quote("From another book.")
+    other["book_title"] = "Second Book"
+    other["author"] = "B. Author"
+    insert_quotes(db, [make_quote("From the first book."), other])
+    assert db.query_one("SELECT COUNT(*) AS n FROM books")["n"] == 2
+
+
+def test_insert_quotes_without_book_metadata_leaves_quote_unlinked(db):
+    insert_quotes(db, [{"quote_text": "No book attached."}])
+    assert db.query_one("SELECT COUNT(*) AS n FROM books")["n"] == 0
+    assert db.query_one("SELECT book_id FROM quotes")["book_id"] is None
 
 
 # --- selection ---------------------------------------------------------
@@ -112,6 +159,15 @@ def test_used_quotes_are_never_selected_again(db):
 
 def test_empty_pool_returns_none(db):
     assert next_unused_quote(db) is None
+
+
+def test_selected_quote_carries_flat_author_and_book_title(db):
+    """generate_post and make_card read quote['author']/quote['book_title']
+    directly — the books normalization must not break that shape."""
+    insert_quotes(db, [make_quote("Trust the glider.")])
+    quote = next_unused_quote(db)
+    assert quote["author"] == "A. Author"
+    assert quote["book_title"] == "Masterclass"
 
 
 # --- recording posts ---------------------------------------------------
